@@ -4,6 +4,7 @@ import {
   intro,
   isCancel,
   log,
+  multiselect,
   note,
   outro,
   select,
@@ -21,7 +22,7 @@ import { addGitHubWorkflowToAlchemy } from "../services/github-workflow.ts";
 import { installDependencies } from "../services/package-manager.ts";
 import { copyTemplate } from "../services/template-manager.ts";
 import { ensureVibeRulesPostinstall } from "../services/vibe-rules.ts";
-import { ExitSignal, loggedProcedure } from "../trpc.ts";
+import { ExitSignal, loggedProcedure } from "../trpc.ts"
 import type {
   CreateInput,
   EditorType,
@@ -88,8 +89,11 @@ async function createAlchemy(cliOptions: CreateInput): Promise<void> {
 
     await handleDirectoryOverwrite(context);
     await initializeTemplate(context);
-    await setupVibeRules(context);
-    await setupGitHubActions(context);
+
+    const selectedAddons = await getSelectedAddons(context);
+
+    await setupVibeRules(context, selectedAddons);
+    await setupGitHubActions(context, selectedAddons);
     await setupGit(context);
 
     displayNextSteps(context);
@@ -276,7 +280,14 @@ async function initializeTemplate(context: ProjectContext): Promise<void> {
   }
 }
 
-async function setupVibeRules(context: ProjectContext): Promise<void> {
+async function setupVibeRules(
+  context: ProjectContext,
+  selectedAddons: string[],
+): Promise<void> {
+  if (!selectedAddons.includes("vibe-rules")) {
+    return;
+  }
+
   const selectedEditor = await getSelectedEditor(context);
 
   if (!selectedEditor) {
@@ -300,23 +311,43 @@ async function setupVibeRules(context: ProjectContext): Promise<void> {
   }
 }
 
+async function getSelectedAddons(context: ProjectContext): Promise<string[]> {
+  if (context.isTest || context.options.yes) {
+    return [];
+  }
+
+  const addonsResult = await multiselect({
+    message: "Which addons would you like to setup?",
+    options: [
+      {
+        label: "vibe-rules",
+        value: "vibe-rules",
+        hint: "AI development assistance for your editor",
+      },
+      {
+        label: "github-actions",
+        value: "github-actions",
+        hint: "PR previews and automated workflows",
+      },
+    ],
+    required: false,
+  });
+
+  if (isCancel(addonsResult)) {
+    return [];
+  }
+
+  return addonsResult;
+}
+
 async function getSelectedEditor(
   context: ProjectContext,
 ): Promise<EditorType | undefined> {
   let selectedEditor: EditorType | undefined = context.options.vibeRules;
 
   if (!selectedEditor && !context.isTest && !context.options.yes) {
-    const setupResult = await confirm({
-      message: "Setup vibe-rules for AI development assistance?",
-      initialValue: true,
-    });
-
-    if (isCancel(setupResult) || !setupResult) {
-      return undefined;
-    }
-
     const editorResult = await select({
-      message: "Which editor would you like to configure?",
+      message: "Which editor would you like to configure for vibe-rules?",
       options: [
         { label: "Cursor", value: "cursor" },
         { label: "Windsurf", value: "windsurf" },
@@ -342,10 +373,11 @@ async function getSelectedEditor(
   return selectedEditor;
 }
 
-async function setupGitHubActions(context: ProjectContext): Promise<void> {
-  const shouldSetup = await getShouldSetupGitHubActions(context);
-
-  if (!shouldSetup) {
+async function setupGitHubActions(
+  context: ProjectContext,
+  selectedAddons: string[],
+): Promise<void> {
+  if (!selectedAddons.includes("github-actions")) {
     return;
   }
 
@@ -354,31 +386,6 @@ async function setupGitHubActions(context: ProjectContext): Promise<void> {
   } catch (error) {
     throwWithContext(error, "GitHub workflow setup failed");
   }
-}
-
-async function getShouldSetupGitHubActions(
-  context: ProjectContext,
-): Promise<boolean> {
-  let shouldSetupGitHub = context.options.githubActions;
-
-  if (
-    shouldSetupGitHub === undefined &&
-    !context.isTest &&
-    !context.options.yes
-  ) {
-    const setupResult = await confirm({
-      message: "Add GitHub Actions for PR previews?",
-      initialValue: true,
-    });
-
-    if (isCancel(setupResult) || !setupResult) {
-      return false;
-    }
-
-    shouldSetupGitHub = true;
-  }
-
-  return shouldSetupGitHub ?? false;
 }
 
 async function setupGit(context: ProjectContext): Promise<void> {
